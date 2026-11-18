@@ -1,0 +1,29 @@
+# Decizii
+
+- Dependențele sunt grupate ca `optional-dependencies` în `pyproject.toml` (`core`, `ui`, `test`, `dev`, `ai`), pentru că funcționează cu orice versiune de pip. Instalarea: `pip install -e ".[core,ui,test,dev]"`.
+- Soldul unui cont se calculează mereu din ledger (`SUM`). Nu există sold stocat în cache, deci nu există verificare de consistență de întreținut.
+- Un cont are o singură monedă. Conturile de sistem (`CASH-<MONEDĂ>`, `FX-<MONEDĂ>`) permit sold negativ; conturile de client nu.
+- Cursul este stocat ca RON pentru o unitate (`base` = moneda, `quote` = RON, `rate_e8`). Conversia între două monede nu trece prin RON: suma țintă se calculează dintr-o singură rotunjire half-even (`convert_minor`).
+- Diferențele de rotunjire și spread-ul rămân în conturile de schimb (`FX-<MONEDĂ>`): fiecare monedă are propriile două înregistrări, deci suma pe monedă este exact zero. Echivalentul RON al fiecărei înregistrări se calculează o singură dată; reziduul RON al tranzacției se stochează în `transactions.ron_residual_minor`.
+- Automatul de stări: `blocked` poate trece doar în `cancelled`; `under_review` poate trece în `approved`, `blocked` sau `cancelled`; `completed` și `cancelled` sunt finale. Banii se mută doar la trecerea `approved` -> `completed`.
+- Fondurile unui transfer aflat în `under_review` nu sunt rezervate. La aprobare se verifică din nou soldul și cursul; dacă eșuează, aprobarea se anulează integral și cazul rămâne deschis.
+- La creare, transferul eșuat (fonduri insuficiente, curs expirat) nu lasă urme în `transfers`; apare doar eroarea standardizată. Cheia de idempotență nu se consumă la erori.
+- Cheia de idempotență are scop pe utilizator și operațiune; aceeași cheie cu conținut diferit dă `409 idempotency_key_reuse`.
+- Clienții nu văd scorul, regulile declanșate sau cazul asociat unui transfer; acestea sunt vizibile doar pentru conformitate și admin.
+- Regula `circular_flow` marchează și transferurile reciproce între conturile aceluiași client. Este intenționat: regula se bazează pe graf, nu pe proprietar. Testele care mută bani înapoi și înainte dezactivează regula explicit.
+- Pragurile de scor pentru `review` (50) și `block` (90) sunt în configurare, nu în tabelul de reguli.
+- Webhook-urile și evenimentele sunt în modulul `audit` (tabelele `webhooks`, `webhook_deliveries`), pentru a nu adăuga un modul în afara listei din cerință.
+- JWT HS256 este implementat cu `hmac`/`base64` din biblioteca standard; parolele folosesc `pbkdf2_hmac` din biblioteca standard. Nu s-au adăugat dependențe pentru ele.
+- Secretul JWT vine din `LEDGERGUARD_JWT_SECRET`; dacă lipsește se generează aleator la pornire, iar sesiunile nu supraviețuiesc repornirii. Parolele de seed vin din `LEDGERGUARD_SEED_PASSWORD` sau se generează și se scriu în `data/seed_credentials.txt`.
+- Orchestrările care implică mai multe module (`deposit`, detaliu de transfer, decizie de caz, confirmare asistent, călătorie în timp) sunt în `app/workflows.py`, pentru a evita dependențe circulare între module.
+- Modulul `fraud` citește istoricul prin `HistoryPort`, implementat în `app/wiring.py` peste serviciile `transfers` și `accounts`.
+- `OfflineAnalyst` folosește reguli deterministe peste tool-uri; textele introduse de utilizatori sunt marcate `untrusted_text`, sunt scanate pentru formulări de tip instrucțiune și nu influențează decizia, cu excepția faptului că o recomandare `approve` devine `escalate`.
+- `AnthropicClient` este activ doar cu `ANTHROPIC_API_KEY`. Orice eroare sau răspuns invalid duce la `OfflineAnalyst` și raportul poartă `engine = offline-fallback`.
+- Asistentul client: limita de sumă (implicit 5000 RON) se aplică la pregătirea operațiunii; operațiunea expiră după 15 minute; confirmarea trece prin aceleași reguli antifraudă ca orice transfer.
+- Simulatorul rulează prin API-ul real, folosind un client în proces (`TestClient`), deci `httpx` este în grupul `core`. Cu `FixedClock` (teste) simulatorul avansează ceasul: conturile "stabilite" sunt îmbătrânite cu 8 zile înainte de atac. Pe un server cu ceas real nu există îmbătrânire, deci conturile sunt noi și regulile pentru cont nou se declanșează; rezultatele sunt reproductibile doar în același mod de ceas.
+- Traficul legitim din simulator curge doar în sens unic între patru clienți, ca să nu formeze cicluri.
+- Testele Robot rulează aplicația în proces (`TestClient`) cu `FixedClock` și o bază SQLite temporară; `DbLibrary.py` deschide o conexiune separată la același fișier.
+- Panoul de calitate citește `reports/robot/output.xml`; acoperirea pe reguli se calculează din etichetele `rule:<tip>` ale testelor trecute.
+- Singurul câmp `REAL` din schemă este `agent_reports.confidence` (încredere, nu sumă de bani).
+- `docs/schema.sql` este generat prin concatenarea `migrations/*.sql`, care rămân sursa autoritară.
+- Nimic din acest proiect nu a fost rulat în timpul construirii (restricțiile de mediu); fișierele sunt scrise și revizuite static.
